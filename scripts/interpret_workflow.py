@@ -315,6 +315,27 @@ def run_interpret_workflow(input_file, project_root=None, text_style="formal", c
 
     subprocess.run(cmd, check=True)
 
+    # [POST-ILLUSTRATOR] If cover.png was NOT generated (gen_images=False), substitute with first original image
+    cover_png = os.path.join(assets_dir, "cover.png")
+    if not os.path.exists(cover_png):
+        orig_dir = os.path.join(assets_dir, "original")
+        fallback_cover = None
+        if os.path.exists(orig_dir):
+            # Pick first image file that looks like an article image (not author/thumbnail)
+            candidates = sorted([
+                f for f in os.listdir(orig_dir)
+                if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp'))
+                and not any(skip in f.lower() for skip in ['author', 'thumblarge', 'avatar', 'logo'])
+            ])
+            if candidates:
+                fallback_cover = os.path.join(orig_dir, candidates[0])
+        if fallback_cover:
+            import shutil as _shutil
+            _shutil.copy2(fallback_cover, cover_png)
+            print(f"  [Cover Fallback] cover.png not generated, using: {os.path.basename(fallback_cover)}")
+        else:
+            print(f"  [Cover Fallback] No suitable fallback found — cover.png will be absent.")
+
     # 7. Final Polish: interpreted.md is already in output/
     # Ensure asset paths are relative to output/ (i.e., ../assets/)
     asset_rel_path = "../assets"
@@ -447,14 +468,14 @@ def generate_html(markdown_file, keep_title=False):
     # Strip frontmatter (Anchored to the very start of the string)
     md_no_fm = re.sub(r'\A---\s*.*?\s*---\s*', '', md_content, flags=re.DOTALL)
 
-    # [FIX] Ensure all relative asset paths are converted to absolute for PDF engine robustness
+    # [FIX] Keep asset paths as-is — relative paths work correctly for both
+    # local HTML preview and wechat-api upload (baseDir resolution).
+    # Do NOT convert to file:// URIs — wechat-api cannot handle them.
     project_root = pathlib.Path(markdown_file).parent.parent
     def make_abs(match):
         alt = match.group(1)
         rel = match.group(2)
-        if rel.startswith('../assets'):
-            abs_path = (project_root / rel.lstrip('./')).resolve()
-            return f'![{alt}]({abs_path.as_uri()})'
+        # Keep ../assets paths as relative — they resolve correctly from output/
         return match.group(0)
 
     md_no_fm = re.sub(r'!\[(.*?)\]\((.*?)\)', make_abs, md_no_fm)

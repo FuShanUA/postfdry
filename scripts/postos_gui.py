@@ -558,7 +558,14 @@ class PostOSGUI:
                 self.status_label.config(text="💡 检测到输入 URL/路径已变更，请点击“分析并配置流水线”重新分析")
 
     def browse_input(self):
-        f = filedialog.askopenfilename(filetypes=[("Markdown files", "*.md"), ("All files", "*.*")])
+        f = filedialog.askopenfilename(filetypes=[
+            ("Supported files", "*.md *.txt *.pdf *.docx *.html *.htm"),
+            ("Markdown files", "*.md"),
+            ("HTML files", "*.html *.htm"),
+            ("PDF files", "*.pdf"),
+            ("Word files", "*.docx"),
+            ("All files", "*.*")
+        ])
         if f:
             self.input_var.set(f)
             # Try to pre-read title if local markdown
@@ -615,14 +622,22 @@ class PostOSGUI:
 
         if not slug:
             if not target.startswith(('http://', 'https://')):
-                title = os.path.basename(target).replace('.md', '')
-                try:
-                    with open(target, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    meta_eng = MetadataEngine(content)
-                    title = meta_eng.get('title', title)
-                except: pass
-                slug = slugify(title)
+                ext = os.path.splitext(target)[1].lower()
+                if ext in ['.html', '.htm']:
+                    try:
+                        metadata = crawler_agent.sniff_metadata(target)
+                        title = metadata.get('title', 'Untitled_Article')
+                        slug = slugify(title)
+                    except: pass
+                else:
+                    title = os.path.basename(target).replace('.md', '')
+                    try:
+                        with open(target, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        meta_eng = MetadataEngine(content)
+                        title = meta_eng.get('title', title)
+                    except: pass
+                    slug = slugify(title)
             else:
                 try:
                     metadata = crawler_agent.sniff_metadata(target)
@@ -907,9 +922,14 @@ class PostOSGUI:
                     expected_title = metadata.get('title', '')
                 else:
                     if os.path.exists(target):
-                        with open(target, 'r', encoding='utf-8') as f:
-                            meta_eng = MetadataEngine(f.read())
-                        expected_title = meta_eng.get('title') or ""
+                        ext = os.path.splitext(target)[1].lower()
+                        if ext in ['.html', '.htm']:
+                            metadata = crawler_agent.sniff_metadata(target)
+                            expected_title = metadata.get('title', '')
+                        else:
+                            with open(target, 'r', encoding='utf-8') as f:
+                                meta_eng = MetadataEngine(f.read())
+                            expected_title = meta_eng.get('title') or ""
                     if not expected_title:
                         expected_title = os.path.splitext(os.path.basename(target))[0]
                 
@@ -1098,8 +1118,13 @@ class PostOSGUI:
         
         # Reset logs and switch to Execution Logs tab to show background activity
         self.log_text.config(state="normal")
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state="disabled")
+        log_content = self.log_text.get(1.0, tk.END).strip()
+        if log_content:
+            self.log_text.config(state="disabled")
+            self.log(f"\n{'='*60}\n🔄 重新生成标题...\n{'='*60}\n")
+        else:
+            self.log_text.delete(1.0, tk.END)
+            self.log_text.config(state="disabled")
         self.notebook.select(self.tab3)
         
         thoughts = self.thoughts_text.get(1.0, tk.END).strip()
@@ -1238,8 +1263,13 @@ class PostOSGUI:
         self.progress_var.set(0)
         self.status_label.config(text="🚀 正在启动工作流...")
         self.log_text.config(state="normal")
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state="disabled")
+        log_content = self.log_text.get(1.0, tk.END).strip()
+        if log_content:
+            self.log_text.config(state="disabled")
+            self.log(f"\n{'='*60}\n🚀 启动工作流运行...\n{'='*60}\n")
+        else:
+            self.log_text.delete(1.0, tk.END)
+            self.log_text.config(state="disabled")
 
         # Prepare background command line arguments
         venv_python = "/Users/shanfu/cc/.venv/bin/python"
@@ -1280,6 +1310,8 @@ class PostOSGUI:
             cmd.append("--gen-images")
         if self.pdf_gen_var.get():
             cmd.append("--pdf")
+        else:
+            cmd.append("--no-pdf")
 
         print(f"🚀 [GUI] Running: {' '.join(cmd)}")
         threading.Thread(target=self.run_worker_thread, args=(cmd,), daemon=True).start()

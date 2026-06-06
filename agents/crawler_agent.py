@@ -23,14 +23,14 @@ from playwright.sync_api import sync_playwright
 import requests
 
 # Path for common_utils and llm_utils
-agents_dir = os.path.dirname(os.path.abspath(__file__))
-if agents_dir not in sys.path:
-    sys.path.append(agents_dir)
-# Standalone fallback support: use local common directory if present, otherwise fallback to project-wide common
-local_common = os.path.abspath(os.path.join(agents_dir, "..", "common"))
-common_dir = local_common if os.path.exists(local_common) else os.path.abspath(os.path.join(agents_dir, "..", "..", "common"))
-if common_dir not in sys.path:
-    sys.path.append(common_dir)
+AGENTS_DIR = os.path.dirname(os.path.abspath(__file__))
+POSTFDRY_ROOT = os.path.dirname(AGENTS_DIR)
+local_common = os.path.abspath(os.path.join(POSTFDRY_ROOT, "common"))
+common_dir = local_common if os.path.exists(local_common) else os.path.abspath(os.path.join(POSTFDRY_ROOT, "..", "common"))
+
+for d in [common_dir, AGENTS_DIR]:
+    if d not in sys.path:
+        sys.path.insert(0, d)
 
 def process_table(table_element):
     """Convert HTML table to proper Markdown table."""
@@ -105,6 +105,10 @@ def html_to_markdown(element):
     if tag_name == 'img':
         alt = element.get('alt', 'Image')
         src = element.get('src', '')
+        # URL-encode spaces in src to prevent Markdown parser truncation
+        import urllib.parse as _up
+        if src and ' ' in src:
+            src = _up.quote(src, safe='/:@!$&\'()*+,;=?#%.')
         return f"![{alt}]({src})"
 
     return "".join(html_to_markdown(child) for child in element.children)
@@ -116,7 +120,21 @@ def extract_ld_json_metadata(html_content):
     ld_results = []
     for script in scripts:
         try:
-            data = json.loads(script.string)
+            text = script.string or script.get_text() or ""
+            # Clean comments and CDATA
+            text = re.sub(r'^\s*<!--(?:.*?-->)?', '', text, flags=re.DOTALL)
+            text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+            text = re.sub(r'/\*<!\[CDATA\[\*/', '', text)
+            text = re.sub(r'/\*\]\]>\*/', '', text)
+            text = text.strip()
+            if text.startswith("<!--"):
+                text = text[4:]
+            if text.endswith("-->"):
+                text = text[:-3]
+            text = text.strip()
+            if not text:
+                continue
+            data = json.loads(text)
             if isinstance(data, list): ld_results.extend(data)
             else: ld_results.append(data)
         except: continue
@@ -254,17 +272,36 @@ def parse_date_string(date_str):
     if not date_str:
         return None
     date_str = date_str.strip()
+    
     # 1. ISO Format: 2026-04-02T12:00:00Z -> 2026-04-02
     if 'T' in date_str:
         date_str = date_str.split('T')[0]
     if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
         return date_str
 
-    # 2. AWS/Byline Format (English): 02 APR 2026 or April 2, 2026
+    # 1.5. Pure digit Format: 20260601 -> 2026-06-01
+    if re.match(r'^\d{8}$', date_str):
+        return f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+
     months_map = {
         'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04', 'may': '05', 'jun': '06',
         'jul': '07', 'aug': '08', 'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
     }
+
+    # Match: YYYY/MM/DD or YYYY.MM.DD
+    m = re.search(r'^(\d{4})[./](\d{1,2})[./](\d{1,2})$', date_str)
+    if m:
+        return f"{m.group(1)}-{m.group(2).zfill(2)}-{m.group(3).zfill(2)}"
+
+    # Match: April 2, 2026 or Jun 1, 2026
+    m = re.search(r'([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})', date_str)
+    if m:
+        month = months_map.get(m.group(1).lower()[:3], "01")
+        day = m.group(2).zfill(2)
+        year = m.group(3)
+        return f"{year}-{month}-{day}"
+
+    # 2. AWS/Byline Format (English): 02 APR 2026
     # Match: 02 APR 2026
     m = re.search(r'(\d{1,2})\s+([A-Z]{3})\s+(\d{4})', date_str, re.IGNORECASE)
     if m:
@@ -301,16 +338,39 @@ def normalize_source(author, platform):
     return platform
 
 def sniff_metadata(url):
-    """Lightweight metadata extraction using Standard Fallback: LD-JSON > OG > Title > H1."""
-    if "x.com" in url or "twitter.com" in url:
-        return {"title": f"X post", "source": "X", "author": "Unknown", "url": url}
+    """Lightweight metadata extraction using Standard Fallback: LD-JSON > OG > Title > H1. Supports local files."""
+    html = ""
+    is_local = os.path.exists(url)
+    if is_local:
+        ext = os.path.splitext(url)[1].lower()
+        if ext in ['.html', '.htm']:
+            try:
+                with open(url, 'r', encoding='utf-8', errors='ignore') as f:
+                    html = f.read()
+            except Exception as e:
+                print(f"  [Sniffing Failed] Local read failed: {e}")
+                return {}
+        else:
+            try:
+                meta, _ = extract_from_file(url)
+                return meta
+            except Exception as e:
+                print(f"  [Sniffing Failed] extract_from_file failed: {e}")
+                return {}
+    else:
+        if "x.com" in url or "twitter.com" in url:
+            return {"title": f"X post", "source": "X", "author": "Unknown", "url": url}
 
-    print(f"Crawler Agent: Sniffing metadata for {url}...")
+        print(f"Crawler Agent: Sniffing metadata for {url}...")
+        try:
+            req = Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
+            with urlopen(req, timeout=10) as response:
+                html = response.read(1024 * 1024) # Read first 1MB
+        except Exception as e:
+            print(f"  [Sniffing Failed] {e}")
+            return {}
+
     try:
-        req = Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'})
-        with urlopen(req, timeout=10) as response:
-            html = response.read(1024 * 1024) # Read first 1MB
-
         soup = BeautifulSoup(html, 'html.parser')
         metadata = {
             "title": "",
@@ -331,9 +391,10 @@ def sniff_metadata(url):
 
         # 2. OG Titles (Medium Fidelity) - Fallback for Title
         if not metadata["title"]:
-            og_title = soup.find("meta", property="og:title") or \
+            og_title = soup.find("meta", {"property": "og:title"}) or \
                        soup.find("meta", {"name": "og:title"}) or \
-                       soup.find("meta", property="twitter:title")
+                       soup.find("meta", {"property": "twitter:title"}) or \
+                       soup.find("meta", {"name": "twitter:title"})
             if og_title:
                 metadata["title"] = og_title.get("content", "").strip()
 
@@ -348,13 +409,15 @@ def sniff_metadata(url):
 
         # 4. Date (OG/Meta Fallback)
         if not metadata["publish_date"]:
-            date_meta = soup.find("meta", property="article:published_time") or \
+            date_meta = soup.find("meta", {"property": "article:published_time"}) or \
                         soup.find("meta", {"name": "article:published_time"}) or \
-                        soup.find("meta", property="og:published_time") or \
+                        soup.find("meta", {"property": "og:published_time"}) or \
                         soup.find("meta", {"name": "date"}) or \
                         soup.find("meta", {"property": "datePublished"}) or \
                         soup.find("meta", {"itemprop": "datePublished"}) or \
-                        soup.find("meta", property="article:modified_time")
+                        soup.find("meta", {"property": "article:modified_time"}) or \
+                        soup.find("meta", {"name": "pdate"}) or \
+                        soup.find("meta", {"property": "pdate"})
             if date_meta:
                 extracted_raw = date_meta.get("content", "").strip() or date_meta.get("datetime", "").strip()
                 metadata["publish_date"] = parse_date_string(extracted_raw)
@@ -362,23 +425,33 @@ def sniff_metadata(url):
         # 5. Author (OG/Meta Fallback)
         if not metadata["author"]:
             author_meta = soup.find("meta", {"name": "author"}) or \
-                          soup.find("meta", property="article:author") or \
+                          soup.find("meta", {"property": "article:author"}) or \
                           soup.find("meta", {"name": "twitter:creator"}) or \
                           soup.find("meta", {"itemprop": "author"}) or \
-                          soup.find("meta", {"property": "author"})
+                          soup.find("meta", {"property": "author"}) or \
+                          soup.find("meta", {"name": "byl"}) or \
+                          soup.find("meta", {"property": "byl"})
             if author_meta:
                 metadata["author"] = author_meta.get("content", "").strip() or author_meta.get("name", "").strip()
 
+        if metadata["author"] and metadata["author"] != "Unknown":
+            metadata["author"] = re.sub(r'(?i)^by\s+', '', metadata["author"]).strip()
+            if metadata["author"].startswith("http") and "/by/" in metadata["author"]:
+                name_part = metadata["author"].split("/by/")[-1].strip("/")
+                metadata["author"] = " ".join([w.capitalize() for w in name_part.split("-")])
+
         # 6. Source (OG/Domain Fallback)
         if not metadata["source"]:
-            source_meta = soup.find("meta", property="og:site_name") or \
+            source_meta = soup.find("meta", {"property": "og:site_name"}) or \
                           soup.find("meta", {"name": "og:site_name"}) or \
                           soup.find("meta", {"name": "application-name"})
             if source_meta:
                 metadata["source"] = source_meta.get("content", "").strip()
-            else:
+            elif not is_local:
                 domain = urlparse(url).netloc
                 metadata["source"] = domain.split('.')[-2].capitalize() if '.' in domain else domain
+            else:
+                metadata["source"] = "Local File"
 
         # Final Normalization for source
         if metadata["author"] and metadata["source"]:
@@ -552,45 +625,61 @@ def extract_from_url(url):
             except Exception as parse_err:
                 print(f"Crawler Agent: Tier 1 parsing failed or incomplete: {parse_err}")
 
-        # TIER 2: Defuddle CLI
-        # 第二顺位：通用解析兜底。
-        try:
-            print(f"Crawler Agent: Trying Tier 2 (Defuddle CLI)...")
-            result = subprocess.run(
-                ["defuddle", "parse", url, "--md"],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return sniffed, result.stdout.strip()
-        except Exception as defuddle_err:
-            print(f"Crawler Agent: Tier 2 direct failed: {defuddle_err}. Trying NPX fallback...")
+        # TIER 2: Defuddle CLI - Standalone Optimized
+        defuddle_cli = os.path.join(POSTFDRY_ROOT, "lib", "defuddle", "dist", "cli.js")
+
+        # Cross-platform binary resolution
+        ext = ".exe" if os.name == 'nt' else ""
+        bundled_bun = os.path.join(POSTFDRY_ROOT, "lib", "bun", f"bun{ext}")
+        bundled_node = os.path.join(POSTFDRY_ROOT, "lib", "node", f"node{ext}")
+
+        # On macOS portable node, the binary is in bin/node
+        if os.name == 'posix' and not os.path.exists(bundled_node):
+            alt_node = os.path.join(POSTFDRY_ROOT, "lib", "node", "bin", "node")
+            if os.path.exists(alt_node):
+                bundled_node = alt_node
+
+        runtime_path = bundled_bun if os.path.exists(bundled_bun) else (bundled_node if os.path.exists(bundled_node) else "node")
+
+        if os.path.exists(defuddle_cli):
             try:
+                print(f"Crawler Agent: Trying Tier 2 (Bundled Defuddle via {os.path.basename(runtime_path)})...")
                 result = subprocess.run(
-                    ["npx", "-y", "defuddle", "parse", url, "--md"],
-                    capture_output=True,
-                    text=True,
-                    check=True
+                    [runtime_path, defuddle_cli, "parse", url, "--md"],
+                    capture_output=True, text=True, check=True, encoding='utf-8'
                 )
                 if result.returncode == 0 and result.stdout.strip():
                     return sniffed, result.stdout.strip()
-            except Exception as npx_err:
-                print(f"Crawler Agent: Tier 2 NPX failed: {npx_err}")
+            except Exception as defuddle_err:
+                print(f"Crawler Agent: Tier 2 failed: {defuddle_err}")
+        else:
+            try:
+                print(f"Crawler Agent: Trying Tier 2 (System Defuddle Fallback)...")
+                result = subprocess.run(
+                    ["defuddle", "parse", url, "--md"],
+                    capture_output=True, text=True, check=True, shell=True
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return sniffed, result.stdout.strip()
+            except Exception:
+                pass
 
-        # TIER 3: Baoyu Bun Skill (Last Resort)
-        # 第三顺位：仅当所有方案失效时使用。
-        bun_skill_path = os.path.normpath(r"/Users/shanfu/cc/Library/Tools/baoyu-skills/skills/baoyu-danger-x-to-markdown/scripts/main.ts")
-        if os.path.exists(bun_skill_path):
+        # TIER 3: Baoyu Bun Skill (Last Resort) - Standalone version
+        from common_utils import resolve_tool_path
+        bun_skill_base = resolve_tool_path("baoyu-danger-x-to-markdown")
+        bun_skill_path = os.path.join(bun_skill_base, "scripts", "main.ts") if bun_skill_base else None
+
+        if bun_skill_path and os.path.exists(bun_skill_path):
             print(f"Crawler Agent: Trying Tier 3 (Baoyu Skill - Last Resort)...")
             try:
                 import hashlib
                 import tempfile
                 temp_out = os.path.join(tempfile.gettempdir(), f"x_temp_{hashlib.md5(url.encode()).hexdigest()[:8]}.md")
-                subprocess.run(["bun", "--version"], capture_output=True, check=True, shell=True)
-                cmd = f'bun "{bun_skill_path}" "{url}" -o "{temp_out}"'
-                print(f"  [Executing] {cmd}")
-                res = subprocess.run(cmd, capture_output=True, text=True, shell=True)
+
+                # Use bundled runtime
+                cmd = [runtime_path, bun_skill_path, url, "-o", temp_out]
+                print(f"  [Executing] {' '.join(cmd)}")
+                res = subprocess.run(cmd, capture_output=True, text=True)
 
                 if res.returncode == 0 and os.path.exists(temp_out):
                     with open(temp_out, "r", encoding="utf-8") as f:
@@ -620,8 +709,6 @@ def extract_from_url(url):
 
     elif "medium.com/" in url:
         print(f"Crawler Agent: Detected Medium URL. Fetching via Playwright...")
-        playwright_success = False
-        html_content = ""
         try:
             with sync_playwright() as p:
                 browser = p.chromium.launch(
@@ -629,70 +716,18 @@ def extract_from_url(url):
                     args=['--disable-blink-features=AutomationControlled']
                 )
                 context = browser.new_context(
-                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
                 )
                 page = context.new_page()
                 page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
                 page.goto(url, wait_until="domcontentloaded", timeout=60000)
-
-                # Cloudflare challenge detection & wait loop (up to 30s)
-                for attempt in range(6):
-                    page_title = page.title()
-                    if "moment" not in page_title.lower() and "checking" not in page_title.lower():
-                        break
-                    print(f"  [CF Wait] Attempt {attempt+1}/6: Cloudflare challenge detected, waiting 5s...")
-                    page.wait_for_timeout(5000)
-
                 try:
-                    page.wait_for_selector("article, [data-testid='post-title']", timeout=15000)
+                    page.wait_for_selector("article, [data-testid='post-title']", timeout=20000)
                 except Exception:
                     page.wait_for_timeout(3000)
-
                 html_content = page.content()
                 browser.close()
 
-            # Verify we actually got article content (not a CF challenge page)
-            if '<article' in html_content or 'APOLLO_STATE' in html_content or 'ld+json' in html_content:
-                playwright_success = True
-            else:
-                print("Crawler Agent: Playwright got a Cloudflare challenge page, not article content.")
-
-        except Exception as e:
-            print(f"Crawler Agent: Playwright Medium extraction failed: {e}")
-
-        # FALLBACK: defuddle CLI when Playwright fails (bypasses CF at the HTTP level)
-        if not playwright_success:
-            print(f"Crawler Agent: Falling back to Defuddle CLI for Medium...")
-            try:
-                result = subprocess.run(
-                    ["npx", "-y", "defuddle", "parse", url, "--md"],
-                    capture_output=True,
-                    text=True,
-                    timeout=60
-                )
-                if result.returncode == 0 and result.stdout.strip():
-                    defuddle_output = result.stdout.strip()
-                    md_content = defuddle_output
-                    print(f"Crawler Agent: Defuddle CLI success for Medium ({len(md_content)} chars)")
-                    # Try to extract metadata from defuddle JSON output
-                    try:
-                        defuddle_data = json.loads(defuddle_output)
-                        if isinstance(defuddle_data, dict):
-                            if defuddle_data.get("title"): title = defuddle_data["title"]
-                            if defuddle_data.get("author"): author = defuddle_data["author"]
-                            if defuddle_data.get("published"):
-                                extracted_date = parse_date_string(defuddle_data["published"])
-                            if defuddle_data.get("site"): source = defuddle_data["site"]
-                            md_content = defuddle_data.get("content", "") or defuddle_data.get("markdown", "") or ""
-                    except (json.JSONDecodeError, ValueError):
-                        pass  # defuddle returned plain markdown, not JSON
-                else:
-                    print(f"Crawler Agent: Defuddle CLI also failed for Medium. stderr: {result.stderr[:200] if result.stderr else 'none'}")
-            except Exception as defuddle_err:
-                print(f"Crawler Agent: Defuddle CLI fallback failed: {defuddle_err}")
-
-        # Process Playwright HTML if successful
-        if playwright_success and html_content:
             organization = source
             # Try JSON-LD first for metadata
             ld_meta = extract_ld_json_metadata(html_content)
@@ -713,60 +748,64 @@ def extract_from_url(url):
                 if not extracted_date: extracted_date = apollo_result.get("publish_date")
                 if not organization or organization == "Medium": organization = apollo_result.get("source")
             else:
-                if not md_content:
-                    soup = BeautifulSoup(html_content, "html.parser")
-                    article = soup.find("article") or soup.find("main") or soup.body
-                    md_content = html_to_markdown(article)
+                soup = BeautifulSoup(html_content, "html.parser")
+                article = soup.find("article") or soup.find("main") or soup.body
+                md_content = html_to_markdown(article)
 
-            # Ensure organization follows the "Author, Platform" pattern
+            # Ensure organization follows the "Author, Platform" pattern if it's just a platform name
             if author and author != "Unknown":
                 sniffed["source"] = normalize_source(author, organization)
 
-        # LAST RESORT: Extract metadata from OG/meta tags in whatever HTML we have
-        if html_content and (not author or author == "Unknown" or not extracted_date):
-            soup = BeautifulSoup(html_content, "html.parser")
-            if not author or author == "Unknown":
-                author_meta = soup.find("meta", {"name": "author"}) or \
-                              soup.find("meta", property="article:author")
-                if author_meta:
-                    author = author_meta.get("content", "").strip() or author
-            if not extracted_date:
-                date_meta = soup.find("meta", property="article:published_time") or \
-                            soup.find("meta", {"name": "date"})
-                if date_meta:
-                    extracted_date = parse_date_string(date_meta.get("content", "").strip())
-            if not title or title.startswith("Extracted from"):
-                og_title = soup.find("meta", property="og:title")
-                if og_title:
-                    title = og_title.get("content", "").strip() or title
+        except Exception as e:
+            error_msg = f"Error parsing Medium with Playwright: {e}"
+            print(error_msg)
+            return error_msg
 
     else:
-        print(f"Crawler Agent: Navigating to {url} using Defuddle...")
-        try:
+        # Standalone: Resolve internal Defuddle path
+        defuddle_cli = os.path.join(POSTFDRY_ROOT, "lib", "defuddle", "dist", "cli.js")
+
+        # Cross-platform binary resolution
+        ext = ".exe" if os.name == 'nt' else ""
+        bundled_bun = os.path.join(POSTFDRY_ROOT, "lib", "bun", f"bun{ext}")
+        bundled_node = os.path.join(POSTFDRY_ROOT, "lib", "node", f"node{ext}")
+
+        # On macOS portable node, the binary is in bin/node
+        if os.name == 'posix' and not os.path.exists(bundled_node):
+            alt_node = os.path.join(POSTFDRY_ROOT, "lib", "node", "bin", "node")
+            if os.path.exists(alt_node):
+                bundled_node = alt_node
+
+        runtime = "node"
+        if os.path.exists(bundled_bun):
+            runtime = bundled_bun
+        elif os.path.exists(bundled_node):
+            runtime = bundled_node
+
+        if os.path.exists(defuddle_cli):
+            print(f"Crawler Agent: Navigating to {url} using Bundled Defuddle ({os.path.basename(runtime)})...")
+            try:
+                # Use bundled runtime to run bundled defuddle cli
+                result = subprocess.run(
+                    [runtime, defuddle_cli, "parse", url, "--md"],
+                    capture_output=True, text=True, check=True, encoding='utf-8'
+                )
+                md_content = result.stdout.strip()
+            except subprocess.CalledProcessError as e:
+                error_msg = f"Error loading URL with Defuddle: {e}\n{e.stderr}"
+                print(error_msg)
+                print(f"Crawler Agent: Defuddle failed, attempting fallback to Playwright...")
+        else:
+            # Fallback to system defuddle if available
+            print(f"Crawler Agent: Navigating to {url} using System Defuddle...")
             try:
                 result = subprocess.run(
                     ["defuddle", "parse", url, "--md"],
-                    capture_output=True,
-                    text=True,
-                    check=True
+                    capture_output=True, text=True, check=True, shell=True
                 )
                 md_content = result.stdout.strip()
-            except Exception as e_direct:
-                print(f"Crawler Agent: Defuddle direct failed: {e_direct}. Trying NPX fallback...")
-                result = subprocess.run(
-                    ["npx", "-y", "defuddle", "parse", url, "--md"],
-                    capture_output=True,
-                    text=True,
-                    check=True
-                )
-                md_content = result.stdout.strip()
-        except Exception as e:
-            error_msg = f"Error loading URL with Defuddle: {e}"
-            if hasattr(e, 'stderr') and e.stderr:
-                error_msg += f"\n{e.stderr}"
-            print(error_msg)
-
-            print(f"Crawler Agent: Defuddle failed, attempting fallback to Playwright...")
+            except subprocess.CalledProcessError as e:
+                print(f"Crawler Agent: Defuddle failed, attempting fallback to Playwright...")
             try:
                 with sync_playwright() as p:
                     browser = p.chromium.launch(headless=True)
@@ -864,7 +903,7 @@ def extract_from_url(url):
 
     return {
         "title": title,
-        "publish_date": extracted_date if extracted_date else "",
+        "publish_date": extracted_date if extracted_date else today,
         "author": author,
         "source": normalize_source(author, source),
         "url": url
@@ -895,16 +934,112 @@ def extract_from_file(filepath):
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
 
+    elif ext in ['.html', '.htm']:
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                html_content = f.read()
+            
+            from bs4 import BeautifulSoup
+            # Extract structured metadata via LD+JSON first
+            ld_meta = extract_ld_json_metadata(html_content)
+            soup = BeautifulSoup(html_content, "html.parser")
+            
+            # Extract standard titles
+            title = filename
+            if ld_meta and ld_meta.get("title"):
+                title = ld_meta["title"]
+            else:
+                title_tag = soup.find("title")
+                if title_tag:
+                    title = title_tag.get_text(strip=True)
+                else:
+                    h1 = soup.find("h1")
+                    if h1: title = h1.get_text(strip=True)
+            
+            # Extract author
+            author = "Unknown"
+            if ld_meta and ld_meta.get("author"):
+                author = ld_meta["author"]
+            else:
+                author_meta = soup.find("meta", {"name": "author"}) or \
+                              soup.find("meta", {"property": "article:author"}) or \
+                              soup.find("meta", {"name": "byl"}) or \
+                              soup.find("meta", {"property": "byl"})
+                if author_meta:
+                    author = author_meta.get("content", "").strip()
+            
+            if author and author != "Unknown":
+                author = re.sub(r'(?i)^by\s+', '', author).strip()
+                if author.startswith("http") and "/by/" in author:
+                    name_part = author.split("/by/")[-1].strip("/")
+                    author = " ".join([w.capitalize() for w in name_part.split("-")])
+            
+            # Extract publish date
+            publish_date = ""
+            if ld_meta and ld_meta.get("publish_date"):
+                publish_date = ld_meta["publish_date"]
+            else:
+                date_meta = soup.find("meta", {"property": "article:published_time"}) or \
+                            soup.find("meta", {"name": "date"}) or \
+                            soup.find("meta", {"property": "article:published_time"}) or \
+                            soup.find("meta", {"name": "pdate"}) or \
+                            soup.find("meta", {"property": "pdate"})
+                if date_meta:
+                    publish_date = parse_date_string(date_meta.get("content", "").strip())
+            
+            # Extract source organization
+            source = "Web"
+            if ld_meta and ld_meta.get("source"):
+                source = ld_meta["source"]
+            else:
+                source_meta = soup.find("meta", {"property": "og:site_name"}) or \
+                              soup.find("meta", {"name": "og:site_name"})
+                if source_meta:
+                    source = source_meta.get("content", "").strip()
+            
+            # Extract article content and convert to Markdown
+            article_el = soup.find("article") or soup.find("main") or soup.body
+            content = html_to_markdown(article_el)
+            
+            return {
+                "title": title,
+                "publish_date": publish_date if publish_date else datetime.now().strftime('%Y-%m-%d'),
+                "author": author,
+                "source": normalize_source(author, source),
+                "url": filepath
+            }, content
+            
+        except Exception as html_err:
+            return {
+                "title": filename,
+                "publish_date": "",
+                "author": "Unknown",
+                "source": "File",
+                "url": filepath
+            }, "Error parsing HTML: " + str(html_err)
+ 
     elif ext == '.docx':
         try:
             import docx
             doc = docx.Document(filepath)
             content = "\n\n".join([p.text for p in doc.paragraphs])
         except ImportError:
-            return "Error: python-docx not installed."
-
+            return {
+                "title": filename,
+                "publish_date": "",
+                "author": "Unknown",
+                "source": "File",
+                "url": filepath
+            }, "Error: python-docx not installed."
+ 
     else:
-        return f"Unsupported format: {ext}"
+        return {
+            "title": filename,
+            "publish_date": "",
+            "author": "Unknown",
+            "source": "File",
+            "url": filepath
+        }, f"Unsupported format: {ext}"
 
     today = datetime.now().strftime('%Y-%m-%d')
     return {
@@ -915,17 +1050,13 @@ def extract_from_file(filepath):
         "url": filepath
     }, content
 
-def refine_extracted_content(metadata, body, model_name="gemini-3-flash-preview"):
+def refine_extracted_content(metadata, body, model_name="gemini-3.1-pro-preview"):
     """Refine extracted content using AI and format as strict YAML."""
-    import sys, os
-    local_common = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'common'))
-    common_dir = local_common if os.path.exists(local_common) else os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'common'))
-    if common_dir not in sys.path:
-        sys.path.insert(0, common_dir)
+    # Standalone: common_utils and llm_utils are in the same agents directory
     from llm_utils import get_client
 
     print("Crawler Agent: Identifying core metadata targets...")
-    current_date = metadata.get("publish_date") or ""
+    current_date = metadata.get("publish_date", datetime.now().strftime('%Y-%m-%d'))
 
     client = get_client()
     prompt = f"""
@@ -943,15 +1074,16 @@ def refine_extracted_content(metadata, body, model_name="gemini-3-flash-preview"
        - **MANDATORY**: Exclude ONLY Publication or Column introductions (e.g. "About Metadata Weekly", "About this column", "栏目介绍").
        - **Exclude Hashtags**: Strip hashtags like #AI, #Tech if they appear at the end or as navigation noise.
        - **Exclude Navigation**: Remove "Next post", "Prev post", etc.
+       - **PRESERVE IMAGES (CRITICAL)**: Keep ALL `![alt](path)` image tags exactly as-is. Do NOT remove, shorten, or alter any image markdown tags.
     5. **IMPORTANT - NO HALLUCINATION**:
        - **author**: The person's name (no prefixes). Look for "By [Name]", "Written by [Name]", or "作者：[Name]". If not found in body or raw input, use "Unknown". **DO NOT INVENT**.
        - **source**: The agency/entity (e.g., Palantir, Gartner, AWS).
-       - **FOR INDIVIDUAL POSTS ON PLATFORMS (Medium, X, Substack, etc.)**, use the format "Author Name，Platform Name" (e.g., "Sergey Gromov，Medium", "Elon Musk，X").
-       - **STRICT**: DO NOT USE BRACKETS like 【】 around the source.
+         - **FOR INDIVIDUAL POSTS ON PLATFORMS (Medium, X, Substack, etc.)**, use the format "Author Name，Platform Name" (e.g., "Sergey Gromov，Medium", "Elon Musk，X").
+         - **STRICT**: DO NOT USE BRACKETS like 【】 around the source.
        - **publish_date**: Find the original publication date in YYYY-MM-DD format.
          - **SEARCH THE BODY** for bylines like "April 2, 2026", "on 02 APR 2026", or "发布日期：2026-04-02".
          - Check strings like "date published", "datepublished", "Published on".
-         - If NOT found and NOT in raw input, use '{current_date}'. **DO NOT INVENT** a different date, and **DO NOT default to today's date if not provided in raw input**. If raw input is empty, leave it as empty string "".
+         - If NOT found and NOT in raw input, use '{current_date}'. **DO NOT INVENT** a different past date.
        - **url**: {metadata.get('url', '')}
 
     ### YAML STRUCTURE (MANDATORY FORMAT):
@@ -1023,16 +1155,15 @@ def download_image(url, assets_dir):
         #    print(f"Crawler Agent: Asset already exists, skipping: {filename}")
         return filename
     except Exception as e:
-        print(f"⚠️ Failed to download {url}: {e}")
+        print(f"[WARN] Failed to download {url}: {e}")
         return None
 
 def run(target_input, output_file=None, skip_refine=False, model_name="gemini-3-flash-preview"):
     if os.path.exists(target_input):
         metadata, body = extract_from_file(target_input)
     elif target_input.startswith("http"):
-        # extract_from_url now returns (metadata_dict, body_text)
         result = extract_from_url(target_input)
-        if isinstance(result, str): # Error message
+        if isinstance(result, str):
             print(result)
             sys.exit(1)
         metadata, body = result
@@ -1040,21 +1171,9 @@ def run(target_input, output_file=None, skip_refine=False, model_name="gemini-3-
         print("Error: Target not found and not a valid URL")
         sys.exit(1)
 
-    # Apply AI Refinement
-    if not skip_refine:
-        res = refine_extracted_content(metadata, body, model_name=model_name)
-    else:
-        # Assemble with fallback YAML if skip_refine
-        res = f"---\ntitle: {metadata['title']}\nsource: {metadata['source']}\nauthor: {metadata['author']}\npublish_date: {metadata['publish_date']}\nurl: {metadata['url']}\n---\n\n{body}"
-
-    # Image Localization Step
-    print("Crawler Agent: Localizing images...")
-    # Robust regex for Markdown images
-    img_pattern = r'!\[(.*?)\]\((http[s]?://[^\s\)]+)\)'
-
-    # Resolve assets_dir based on output_file
+    # --- Resolve assets_dir EARLY (needed for pre-localize before AI refine) ---
+    import urllib.parse, shutil
     if output_file:
-        # Check if we are in source/ output/ or project_root
         out_abs = os.path.abspath(output_file)
         parent_dir = os.path.dirname(out_abs)
         if os.path.basename(parent_dir) in ["source", "output", "wip"]:
@@ -1062,21 +1181,59 @@ def run(target_input, output_file=None, skip_refine=False, model_name="gemini-3-
         else:
             project_root = parent_dir
         assets_dir = os.path.join(project_root, "assets", "original")
-        # Relative path from project_root/source/file.md to project_root/assets/original/
-        # Usually "../assets/original/"
         md_img_prefix = "../assets/original/"
     else:
         assets_dir = os.path.join("assets", "original")
         md_img_prefix = "assets/original/"
+
+    os.makedirs(assets_dir, exist_ok=True)
+
+    # [PRE-LOCALIZE] Copy local relative images to assets BEFORE AI refine,
+    # so the LLM sees stable ../assets/original/xxx paths and won't strip them.
+    if os.path.exists(target_input):
+        source_dir_path = os.path.dirname(os.path.abspath(target_input))
+        # Match local relative paths including those with parentheses like 'file(1).jpg'
+        # Pattern: path may contain balanced ()-groups, must end with .extension before closing )
+        local_img_pattern_pre = r'!\[(.*?)\]\(((?!http[s]?://|/|\\|[a-zA-Z]:\\)[^(\n]*(?:\([^)\n]*\)[^(\n]*)*\.[a-zA-Z0-9]{2,5})\)'
+
+        def pre_local_img_replacer(match):
+            alt = match.group(1)
+            raw_path = match.group(2)
+            decoded_path = urllib.parse.unquote(raw_path)
+            img_abs_path = os.path.normpath(os.path.join(source_dir_path, decoded_path))
+            if os.path.exists(img_abs_path) and os.path.isfile(img_abs_path):
+                ext = os.path.splitext(img_abs_path)[1].lower() or ".png"
+                name_hash = hashlib.md5(img_abs_path.encode()).hexdigest()[:10]
+                dest_filename = f"original_{name_hash}{ext}"
+                dest_path = os.path.join(assets_dir, dest_filename)
+                try:
+                    if not os.path.exists(dest_path):
+                        shutil.copy2(img_abs_path, dest_path)
+                        print(f"Crawler Agent: [Pre-localize] Copied {decoded_path} -> {dest_filename}")
+                    return f"![{alt}]({md_img_prefix}{dest_filename})"
+                except Exception as e:
+                    print(f"⚠️ [Pre-localize] Failed to copy {img_abs_path}: {e}")
+            return match.group(0)
+
+        body = re.sub(local_img_pattern_pre, pre_local_img_replacer, body)
+
+    # Apply AI Refinement (body now has stable asset paths)
+    if not skip_refine:
+        res = refine_extracted_content(metadata, body, model_name=model_name)
+    else:
+        res = f"---\ntitle: {metadata['title']}\nsource: {metadata['source']}\nauthor: {metadata['author']}\npublish_date: {metadata['publish_date']}\nurl: {metadata['url']}\n---\n\n{body}"
+
+    # Localize any remaining remote HTTP images in the refined output
+    print("Crawler Agent: Localizing remote images...")
+    img_pattern = r'!\[(.*?)\]\((http[s]?://[^\s\)]+)\)'
 
     def img_replacer(match):
         alt = match.group(1)
         url = match.group(2)
         filename = download_image(url, assets_dir)
         if filename:
-            # Always use forward slashes for cross-platform Markdown links
             return f"![{alt}]({md_img_prefix}{filename})"
-        return match.group(0) # Keep original if failed
+        return match.group(0)
 
     res = re.sub(img_pattern, img_replacer, res)
 
@@ -1099,13 +1256,13 @@ def identify_boilerplate_via_llm(md_content, model_name="gemini-3-flash-preview"
     if not md_content or len(md_content) < 500:
         return md_content
 
-    if len(md_content) < 8000:
-        # For shorter texts, just analyze a smaller window
+    if len(md_content) < 3000:
+        # For very short texts, just analyze a smaller window
+        sample_head = md_content[:1500]
+        sample_tail = md_content[-1500:]
+    else:
         sample_head = md_content[:2000]
         sample_tail = md_content[-2000:]
-    else:
-        sample_head = md_content[:3000]
-        sample_tail = md_content[-6000:]
 
     from llm_utils import get_client
     client = get_client()

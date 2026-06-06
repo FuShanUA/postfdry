@@ -319,7 +319,8 @@ class TranslationWorkflow:
             translated_md_path = translator_agent.run_atomic_translation(
                 str(self.input_file),
                 style="formal",  # 译介模式采用标准 formal 翻译风格
-                project_root=str(self.project_root)
+                project_root=str(self.project_root),
+                model_name=self.model_name
             )
             # Ensure it is also mirrored to wip/translated.md for consistency
             if Path(translated_md_path).resolve() != wip_translated.resolve():
@@ -383,7 +384,7 @@ class TranslationWorkflow:
              from translator_agent import translate_string
              # Try to translate orig_title or current title
              input_title = final_meta.get('title', orig_title) or "Untitled"
-             final_meta['title'] = translate_string(input_title, force_chinese=True)
+             final_meta['title'] = translate_string(input_title, force_chinese=True, model_name=self.model_name)
              print(f"  [Skill] 强制翻译完成: {final_meta['title']}")
 
         # 元数据字段标准化映射 (锁定 publish_date 为 date)
@@ -569,7 +570,8 @@ if __name__ == "__main__":
     parser.add_argument("--localize-images", action="store_true", help="Enable visual localization")
     parser.add_argument("--force-relocalize", action="store_true", help="Force generating new versions of localized images")
     parser.add_argument("--gen-images", action="store_true", help="Generate actual images")
-    parser.add_argument("--pdf", action="store_true", default=True, help="Generate PDF")
+    parser.add_argument("--pdf", action="store_true", default=False, help="Generate PDF")
+    parser.add_argument("--no-pdf", action="store_false", dest="pdf", help="Disable PDF generation")
     parser.add_argument("--no-spawn", action="store_true", help="Suppress new PowerShell window spawning")
     parser.add_argument("--reuse-translation", action="store_true", help="Automatically reuse existing translation in wip/ without asking")
     parser.add_argument("--non-interactive", action="store_true", help="Non-interactive mode")

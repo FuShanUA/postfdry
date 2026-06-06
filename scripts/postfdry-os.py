@@ -147,21 +147,33 @@ class ProjectManager:
             self.expected_eng_title = title
         else:
             # Local file
-            title = os.path.basename(self.input_path).replace('.md', '')
+            ext = os.path.splitext(self.input_path)[1].lower()
+            if ext in ['.html', '.htm']:
+                metadata = crawler_agent.sniff_metadata(self.input_path)
+                title = metadata.get('title', '')
+                if not title:
+                    title = os.path.splitext(os.path.basename(self.input_path))[0]
+            elif ext in ['.txt', '.md']:
+                title = os.path.basename(self.input_path).replace('.md', '')
+                if os.path.exists(self.input_path):
+                    # Try to extract title from YAML if local file
+                    try:
+                        with open(self.input_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                        meta_eng = MetadataEngine(content)
+                        title = meta_eng.get('title', title)
+                    except: pass
+            else:
+                title = os.path.splitext(os.path.basename(self.input_path))[0]
+            
             slug = self._slugify(title)
-            if os.path.exists(self.input_path):
-                # Try to extract title from YAML if local file
-                try:
-                    with open(self.input_path, 'r', encoding='utf-8') as f:
-                        content = f.read()
-                    meta_eng = MetadataEngine(content)
-                    title = meta_eng.get('title', title)
-                except: pass
-                slug = self._slugify(title)
             self.expected_eng_title = title
 
-        # 2. Setup Directories (/Users/shanfu/cc/Projects/<slug>)
-        base_projects_dir = r"/Users/shanfu/cc/Projects"
+        # 2. Setup Directories (dynamic base projects dir)
+        if "PostOS_2.0_Standalone" in POSTFDRY_ROOT:
+            base_projects_dir = os.path.join(POSTFDRY_ROOT, "Projects")
+        else:
+            base_projects_dir = r"/Users/shanfu/cc/Projects"
 
         # Check if we are already in an existing project structure
         input_abs = os.path.abspath(self.input_path)
@@ -289,7 +301,9 @@ class ProjectManager:
     def materialize_source(self, model_name="gemini-3-flash-preview"):
         """Performs the actual crawling and AI refinement."""
         source_file = os.path.join(self.source_dir, "source.md")
-        if self.input_path.startswith(('http://', 'https://')):
+        is_html = self.input_path.lower().endswith('.html') or self.input_path.lower().endswith('.htm')
+        is_pdf = self.input_path.lower().endswith('.pdf')
+        if self.input_path.startswith(('http://', 'https://')) or is_html or is_pdf:
             print(f"🚀 正在抓取并利用 AI 优化原文内容...")
             crawler_agent.run(self.input_path, output_file=source_file, model_name=model_name)
         else:
@@ -668,7 +682,8 @@ if __name__ == "__main__":
     parser.add_argument("--type", help="Article type override (for interpretation)")
     parser.add_argument("--thoughts", help="Editor's thoughts override")
     parser.add_argument("--gen-images", action="store_true", help="Generate images override")
-    parser.add_argument("--pdf", action="store_true", help="Generate PDF override")
+    parser.add_argument("--pdf", dest="pdf", action="store_true", default=None, help="Generate PDF override")
+    parser.add_argument("--no-pdf", dest="pdf", action="store_false", help="Disable PDF generation override")
     parser.add_argument("--localize-images", action="store_true", help="Enable visual localization")
     parser.add_argument("--force-relocalize", action="store_true", help="Force relocalize existing images")
     parser.add_argument("--model", help="LLM model override")
@@ -776,7 +791,7 @@ if __name__ == "__main__":
         article_type = args.type or "trend"
         thoughts = args.thoughts or ""
         gen_images = args.gen_images
-        pdf_gen = args.pdf or (mode != "interpret")
+        pdf_gen = args.pdf if args.pdf is not None else (mode != "interpret")
         final_model = args.model or "gemini-3-flash-preview"
         image_model = args.image_model or "vertex"
         std_title = args.target_title or ""
