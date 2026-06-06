@@ -319,7 +319,8 @@ class TranslationWorkflow:
             translated_md_path = translator_agent.run_atomic_translation(
                 str(self.input_file),
                 style="formal",  # 译介模式采用标准 formal 翻译风格
-                project_root=str(self.project_root)
+                project_root=str(self.project_root),
+                model_name=self.model_name
             )
             # Ensure it is also mirrored to wip/translated.md for consistency
             if Path(translated_md_path).resolve() != wip_translated.resolve():
@@ -333,8 +334,22 @@ class TranslationWorkflow:
         trans_meta = MetadataEngine(trans_content)
         body = trans_meta.clean_body(trans_content, keep_cover=True).strip()
 
+        # Load project config if exists to merge manual adjustments
+        import json
+        config_path = self.wip_dir / "project_config.json"
+        project_config = {}
+        if config_path.exists():
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    project_config = json.load(f)
+            except Exception as e:
+                print(f"⚠️ Failed to load project config: {e}")
+
         # 复制原始元数据作为基础 (这是最可靠的数据源)
         final_meta = self.metadata_engine.raw_meta.copy()
+        for k in ['title', 'eng_title', 'author', 'source', 'date']:
+            if project_config.get(k):
+                final_meta[k] = project_config[k]
 
         # 1. 备份原标题为 eng_title (仅当原标题为英文时，防止二次改写导致中文存入英文位)
         orig_title = self.metadata_engine.get('title')
@@ -383,7 +398,7 @@ class TranslationWorkflow:
              from translator_agent import translate_string
              # Try to translate orig_title or current title
              input_title = final_meta.get('title', orig_title) or "Untitled"
-             final_meta['title'] = translate_string(input_title, force_chinese=True)
+             final_meta['title'] = translate_string(input_title, force_chinese=True, model_name=self.model_name)
              print(f"  [Skill] 强制翻译完成: {final_meta['title']}")
 
         # 元数据字段标准化映射 (锁定 publish_date 为 date)
@@ -474,7 +489,16 @@ class TranslationWorkflow:
 
     def generate_professional_html(self, md_path, meta_engine):
         """调用工具生成基础 HTML，然后使用 Assembler 进行专业增强。"""
-        html_skill_dir = r"/Users/shanfu/cc/Library/Tools/baoyu-skills/skills/baoyu-markdown-to-html"
+        try:
+            from common_utils import resolve_tool_path
+            html_skill_dir = resolve_tool_path("baoyu-markdown-to-html")
+        except Exception as e:
+            print(f"  [Warning] Failed to resolve baoyu-markdown-to-html path dynamically: {e}")
+            html_skill_dir = None
+
+        if not html_skill_dir or not os.path.exists(html_skill_dir):
+            html_skill_dir = r"/Users/shanfu/cc/Library/Tools/baoyu-skills/skills/baoyu-markdown-to-html"
+
         main_ts = os.path.join(html_skill_dir, "scripts", "main.ts")
 
         # 先生成基础 HTML
@@ -569,7 +593,8 @@ if __name__ == "__main__":
     parser.add_argument("--localize-images", action="store_true", help="Enable visual localization")
     parser.add_argument("--force-relocalize", action="store_true", help="Force generating new versions of localized images")
     parser.add_argument("--gen-images", action="store_true", help="Generate actual images")
-    parser.add_argument("--pdf", action="store_true", default=True, help="Generate PDF")
+    parser.add_argument("--pdf", action="store_true", default=False, help="Generate PDF")
+    parser.add_argument("--no-pdf", action="store_false", dest="pdf", help="Disable PDF generation")
     parser.add_argument("--no-spawn", action="store_true", help="Suppress new PowerShell window spawning")
     parser.add_argument("--reuse-translation", action="store_true", help="Automatically reuse existing translation in wip/ without asking")
     parser.add_argument("--non-interactive", action="store_true", help="Non-interactive mode")

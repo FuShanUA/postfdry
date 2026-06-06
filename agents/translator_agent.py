@@ -21,7 +21,7 @@ if common_dir not in sys.path:
 
 from llm_utils import get_client
 # Add agents to path (Hardened absolute path)
-POSTFDRY_ROOT = r"/Users/shanfu/cc/Library/Tools/postfdry"
+POSTFDRY_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 agents_dir = os.path.join(POSTFDRY_ROOT, "agents")
 if agents_dir not in sys.path:
     sys.path.insert(0, agents_dir)
@@ -51,8 +51,8 @@ def build_translation_prompt(source_text, style="formal", unslop_domain=""):
 
     prompt = f"""
 ### ROLE
-你是一名深耕数据治理（Data Governance）多年的资深技术专家和顶级翻译，在大厂负责 DCMM 落地和数据资产管理。你追求“信、达、雅”，不仅保证技术事实 100% 准确，更能将枯燥的英文专业术语转换为地道、专业的中文行业表达。
-你的翻译风格：严谨、专业、去 AI 味。
+你是一名深耕数据治理（Data Governance）多年的资深技术专家和顶级翻译，在大厂负责 DCMM 落地和数据资产管理。你追求“信、达、雅”，不仅保证技术事实 100% 准确，更能将枯燥的英文专业术语转换为地道、专业的简体中文（Simplified Chinese）行业表达。
+你的翻译风格：严谨、专业、去 AI 味。你必须全程使用简体中文，绝对禁止使用繁体中文。
 
 ### CONSTRAINTS (必读规则 - MANDATORY)
 1. **内容完整性 (Content Integrity - CRITICAL)**:
@@ -83,6 +83,12 @@ def build_translation_prompt(source_text, style="formal", unslop_domain=""):
     - **优先级**：严格遵循上述 <TERMINOLOGY> 术语表中的特定译法。
     - **核心人物**：对于文章主要讨论的人物，采用“中文音译 (英文原名)”的格式（仅在正文中首次出现时标注英文），后续仅使用中文音译。
     - **技术/次要人物**：对于文中提及的次要研究员、技术引用或参考文献中的人名，建议**直接保留英文原名**，以确保专业检索的准确性。
+ 10. **必须使用简体中文 (Simplified Chinese ONLY - CRITICAL)**：
+    - 你的所有翻译输出（包括正文、标题、元数据等）**必须完全使用简体中文（Simplified Chinese）**。
+    - **绝对禁止**夹杂繁体字（Traditional Chinese）或台湾、香港等地区的繁体表达。如果遇到不确定的字词，请务必使用简体字。
+ 11. **专有名词真实性与地学化 (Grounding for Proper Nouns - CRITICAL)**：
+    - 对于未在上述 <TERMINOLOGY> 中列出的英文专有名词、公司名、品牌名、软件工具名、特有项目名（例如 Geedge, Geedge Networks, netentsec 等），**绝对禁止凭借直觉、脑补或自信强行翻译**。
+    - 如果你无法 100% 确认其对应的官方标准中文名称，你**必须**保留其英文原名，或使用 `中文暂译 (英文原名)`。绝对禁止捏造翻译，确保学术/商业事实的真实可靠。
 
 {de_ai_protocol}
 
@@ -92,7 +98,7 @@ def build_translation_prompt(source_text, style="formal", unslop_domain=""):
 {source_text}
 
 ### OUTPUT REQUIREMENTS
-- 仅输出翻译后的中文正文内容（如果是 chunk 则输出翻译后的正文，如果有 YAML 元数据则输出包含 YAML 的译文）。
+- 仅输出翻译后的简体中文正文内容（如果是 chunk 则输出翻译后的正文，如果有 YAML 元数据则输出包含 YAML 的译文）。
 - **绝对禁止自我加戏**：严禁在翻译正文的开头或结尾添加任何原文中不存在的导读、引言、前言、提炼、总结、译者注、译者寄语、感悟、评价或任何多余段落。原来是什么就是什么，直奔正文，保持 1:1 纯净翻译。
 - **严禁**任何对话，禁止包含任何 Markdown 格式以外的说明文字，直接返回翻译好的内容。
 """
@@ -140,9 +146,11 @@ def translate_string(s, force_chinese=False, model_name="gemini-3-flash-preview"
             terms_xml = load_terms()
         except: pass
 
-        prompt = f"""Translate the following article title, author, or source into professional, natural B2B Chinese.
-**MANDATORY**: The result must be in Chinese characters.
-**GLOSSARY**: If any terms from the list below appear in the source, you MUST use the specified translation (or keep as-is if specified).
+        prompt = f"""Translate the following article title, author, or source into professional, natural B2B Simplified Chinese (简体中文).
+**MANDATORY**:
+1. The result must be in Simplified Chinese characters (简体字), absolutely no Traditional Chinese (繁体字).
+2. For any proper nouns, brand names, or company names (e.g. Geedge, Geedge Networks, netentsec) not present in the GLOSSARY, if you cannot confirm their official, standard Chinese translation with 100% certainty, you MUST keep them in English (do not attempt to translate or guess them).
+3. If they are in the GLOSSARY below, you MUST use the specified translation.
 
 <TERMINOLOGY>
 {terms_xml}
@@ -159,6 +167,42 @@ Text to translate: {s}"""
              return s # Keep original if translation stayed English
         return res
     return s
+
+def python_chunk_markdown(input_file, output_dir, max_words=800):
+    """
+    Python-native markdown chunker.
+    Splits the markdown file content into chunks of roughly max_words.
+    Tries to split at paragraphs.
+    """
+    with open(input_file, 'r', encoding='utf-8') as f:
+        text = f.read()
+
+    chunks_dir = os.path.join(output_dir, "chunks")
+    os.makedirs(chunks_dir, exist_ok=True)
+
+    paragraphs = text.split('\n\n')
+    chunks = []
+    current_chunk = []
+    current_words = 0
+
+    for para in paragraphs:
+        # Simple word count approximation (by splitting on whitespace)
+        word_count = len(para.split())
+        if current_words + word_count > max_words and current_chunk:
+            chunks.append('\n\n'.join(current_chunk))
+            current_chunk = [para]
+            current_words = word_count
+        else:
+            current_chunk.append(para)
+            current_words += word_count
+
+    if current_chunk:
+        chunks.append('\n\n'.join(current_chunk))
+
+    for idx, chunk in enumerate(chunks):
+        chunk_file = os.path.join(chunks_dir, f"chunk-{idx+1}.md")
+        with open(chunk_file, 'w', encoding='utf-8') as f:
+            f.write(chunk)
 
 def run_atomic_translation(input_file, style="formal", unslop_domain="B2B", project_root=None, model_name="gemini-3-flash-preview"):
     """Coordinates chunking and parallel translation of the input file."""
@@ -218,7 +262,7 @@ def run_atomic_translation(input_file, style="formal", unslop_domain="B2B", proj
             print(f"  [Skill] Translated date: {translated_date}")
 
         header = meta_eng.to_yaml()
-        body = meta_eng.clean_body(source_text)
+        body = meta_eng.clean_body(source_text, keep_cover=True)
         print(f"  [Skill] Metadata found and isolated ({len(meta_eng.raw_meta)} keys).")
     else:
         header = ""
@@ -237,9 +281,39 @@ def run_atomic_translation(input_file, style="formal", unslop_domain="B2B", proj
         if os.path.exists(out_dir):
             shutil.rmtree(out_dir, ignore_errors=True)
 
-        script_path = r"/Users/shanfu/cc/Library/Tools/baoyu-skills/skills/baoyu-translate/scripts/main.ts"
-        cmd_str = f'npx -y bun "{script_path}" chunk "{temp_body_file}" --max-words 800 --output-dir "{out_dir}"'
-        subprocess.run(cmd_str, shell=True, check=True)
+        # Try to resolve baoyu-translate path using common_utils
+        try:
+            from common_utils import resolve_tool_path
+            translate_skill_base = resolve_tool_path("baoyu-translate")
+        except Exception as e:
+            print(f"  [Warning] Failed to import resolve_tool_path: {e}")
+            translate_skill_base = None
+
+        script_path = None
+        if translate_skill_base:
+            script_path = os.path.join(translate_skill_base, "scripts", "main.ts")
+
+        success = False
+        if script_path and os.path.exists(script_path):
+            try:
+                cmd_str = f'npx -y bun "{script_path}" chunk "{temp_body_file}" --max-words 800 --output-dir "{out_dir}"'
+                print(f"  [Skill] Running atomic chunking via Bun: {os.path.basename(input_file)}...")
+                subprocess.run(cmd_str, shell=True, check=True, capture_output=True, text=True)
+                success = True
+            except subprocess.CalledProcessError as e:
+                print(f"  [WARN] Bun chunking failed. Error: {e.stderr[:200] if e.stderr else str(e)}")
+                print("  [WARN] Falling back to Python-native chunker...")
+            except Exception as e:
+                print(f"  [WARN] Unexpected error during Bun execution: {e}")
+                print("  [WARN] Falling back to Python-native chunker...")
+        else:
+            print(f"  [WARN] Could not find baoyu-translate skill main.ts. Checked: {script_path}")
+            print("  [WARN] Falling back to Python-native chunker...")
+
+        if not success:
+            # Python-native fallback (Zero-Dep)
+            print(f"  [Skill] Running Python-native chunker for: {os.path.basename(input_file)}...")
+            python_chunk_markdown(temp_body_file, out_dir, max_words=800)
 
         chunks_dir = os.path.join(out_dir, "chunks")
         # Natural Sort to handle chunk-1.md, chunk-10.md, chunk-2.md correctly

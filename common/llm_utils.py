@@ -254,8 +254,27 @@ class LLMClient:
         if "moonshot" in model_name or "kimi" in model_name: return LLMProvider.MOONSHOT
         if "qwen" in model_name: return LLMProvider.DASHSCOPE
         if "glm" in model_name: return LLMProvider.ZHIPU
-        if "deepseek" in model_name: return LLMProvider.DEEPSEEK
         if "minimax" in model_name or "abab" in model_name: return LLMProvider.MINIMAX
+        
+        if "deepseek" in model_name:
+            # SiliconFlow pattern (e.g. deepseek-ai/DeepSeek-V3 or deepseek-ai/DeepSeek-R1)
+            if "/" in model_name:
+                if self.api_keys.get(LLMProvider.SILICONFLOW):
+                    return LLMProvider.SILICONFLOW
+            
+            # Check keys availability to route dynamically
+            has_deepseek = bool(self.api_keys.get(LLMProvider.DEEPSEEK))
+            has_dashscope = bool(self.api_keys.get(LLMProvider.DASHSCOPE))
+            has_silicon = bool(self.api_keys.get(LLMProvider.SILICONFLOW))
+            
+            if has_deepseek:
+                return LLMProvider.DEEPSEEK
+            if has_dashscope:
+                return LLMProvider.DASHSCOPE
+            if has_silicon:
+                return LLMProvider.SILICONFLOW
+                
+            return LLMProvider.DEEPSEEK
         if "gemini" in model_name or "imagen" in model_name:
             # Route Google models to Vertex ONLY if Vertex variables are explicitly defined in environment.
             # Otherwise, if a Gemini Developer API key is present, prioritize LLMProvider.GEMINI for better stability and quota.
@@ -587,16 +606,13 @@ class LLMClient:
 
     def _list_openai_models(self, provider: LLMProvider) -> List[str]:
         curated_defaults = {
-            LLMProvider.GEMINI: ["gemini-3.5-pro", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-preview"],
-            LLMProvider.OPENAI: ["gpt-5.5", "gpt-5", "gpt-4.5", "gpt-4o", "gpt-4o-mini", "o3-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-            LLMProvider.MOONSHOT: ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
-            LLMProvider.DASHSCOPE: ["deepseek-v4-pro", "qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct"],
-            LLMProvider.ZHIPU: ["glm-5.1", "glm-5", "glm-5-turbo", "glm-4.7", "glm-4.6", "glm-4.5", "glm-4-plus", "glm-4-flash", "glm-4-air"],
+            LLMProvider.GEMINI: ["gemini-3.1-pro-preview", "gemini-3.1-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+            LLMProvider.OPENAI: ["gpt-4o", "gpt-4o-mini", "o3-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+            LLMProvider.MOONSHOT: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+            LLMProvider.DASHSCOPE: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct"],
+            LLMProvider.ZHIPU: ["glm-4.5", "glm-4-plus", "glm-4-flash", "glm-4-air"],
             LLMProvider.DEEPSEEK: ["deepseek-chat", "deepseek-reasoner"],
             LLMProvider.SILICONFLOW: [
-                "deepseek-ai/DeepSeek-V4-Pro",
-                "deepseek-ai/DeepSeek-V4-Flash",
-                "deepseek-ai/DeepSeek-V3.2",
                 "deepseek-ai/DeepSeek-V3", 
                 "deepseek-ai/DeepSeek-R1", 
                 "Qwen/Qwen2.5-72B-Instruct", 
@@ -707,16 +723,13 @@ class LLMClient:
 
     def list_models_by_provider(self, provider: LLMProvider) -> List[str]:
         curated_defaults = {
-            LLMProvider.GEMINI: ["gemini-3.5-pro", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-3.1-pro-preview", "gemini-3.1-flash-preview"],
-            LLMProvider.OPENAI: ["gpt-5.5", "gpt-5", "gpt-4.5", "gpt-4o", "gpt-4o-mini", "o3-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
-            LLMProvider.MOONSHOT: ["kimi-k2.6", "kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
-            LLMProvider.DASHSCOPE: ["deepseek-v4-pro", "qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct"],
-            LLMProvider.ZHIPU: ["glm-5.1", "glm-5", "glm-5-turbo", "glm-4.7", "glm-4.6", "glm-4.5", "glm-4-plus", "glm-4-flash", "glm-4-air"],
+            LLMProvider.GEMINI: ["gemini-3.1-pro-preview", "gemini-3.1-flash-preview", "gemini-2.5-pro", "gemini-2.5-flash"],
+            LLMProvider.OPENAI: ["gpt-4o", "gpt-4o-mini", "o3-mini", "o1", "o1-mini", "gpt-4-turbo", "gpt-3.5-turbo"],
+            LLMProvider.MOONSHOT: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+            LLMProvider.DASHSCOPE: ["qwen-max", "qwen-plus", "qwen-turbo", "qwen2.5-72b-instruct"],
+            LLMProvider.ZHIPU: ["glm-4.5", "glm-4-plus", "glm-4-flash", "glm-4-air"],
             LLMProvider.DEEPSEEK: ["deepseek-chat", "deepseek-reasoner"],
             LLMProvider.SILICONFLOW: [
-                "deepseek-ai/DeepSeek-V4-Pro",
-                "deepseek-ai/DeepSeek-V4-Flash",
-                "deepseek-ai/DeepSeek-V3.2",
                 "deepseek-ai/DeepSeek-V3", 
                 "deepseek-ai/DeepSeek-R1", 
                 "Qwen/Qwen2.5-72B-Instruct", 
@@ -804,8 +817,6 @@ class LLMClient:
             # Static curated list of Vertex AI managed models (2026 suite)
             # Gemini 3.x / 2.5 series
             gemini_models = [
-                "gemini-3.5-pro",
-                "gemini-3.5-flash",
                 "gemini-3.1-pro-preview",
                 "gemini-3-pro-preview",
                 "gemini-3.1-flash-preview",
