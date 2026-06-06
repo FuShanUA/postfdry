@@ -75,7 +75,11 @@ def build_rewriting_prompt(source_text, thoughts="", type_selection="trend", sty
             instruction_text = summary_prompt.strip()
         else:
             theme_rel = f"\n- 如有与【{narrative_theme}】相关，可以稍加提及，但不要硬关联。若叙事主题与本文内容高度相关则可以展开多写，若无直接关联则用一两句话略带提及即可，切忌强行关联、生硬升华。" if has_theme else ""
-            instruction_text = f"请在文章最后生成一个显式总结板块，标题固定为“### 总结与行动建议”，用两三个自然段包含以下内容，不要用僵化的小标题-内容方式，而是夹叙夹议地进行总结：\n- 全文核心观点或洞察，直白表达，严禁虚空套话或强行升华。\n- 结合此叙事逻辑的侧重点（{config['focus']}）与指南（{guide}）进行提炼。{theme_rel}\n- 包含两三条清晰的、可指导行动的具体建议。"
+            instruction_text = f"请在文章最后生成一个非常精简、高度提炼的显式总结板块，以帮助读者快速阅读。具体要求如下：\n" \
+                               f"1. **总结标题**：标题格式必须是“### 总结：[核心思想词组]”（例如“### 总结：数据解耦激活一线创新”）。其中“核心思想词组”应是对总结段落核心思想的高度、简练提炼（6-12字左右），绝对不能重复或包含文章的主标题，也不能使用干瘪的“总结与行动建议”等词。\n" \
+                               f"2. **总结文字（极简要求）**：字数必须严格控制在 150-250 字以内，仅使用一到两个非常精炼的自然段（不包含任何小标题或列表），用夹叙夹议的大白话迅速提炼出：\n" \
+                               f"   - 本文对国内最核心的 1-2 条运营启示（结合侧重点：{config['focus']} 与指南：{guide}）。\n" \
+                               f"   - 2 条字字珠玑、可以直接付诸行动的极简建议（不要啰嗦，直接写做什么）。{theme_rel}"
         ending_instruction = f"""### ENDING: 显式总结 (Explicit Conclusion)
 {instruction_text}"""
     elif summary_mode == "implicit":
