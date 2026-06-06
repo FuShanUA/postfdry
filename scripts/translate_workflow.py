@@ -413,6 +413,12 @@ class TranslationWorkflow:
         # 清洗正文杂质
         body = deterministic_scrub(body)
 
+        # 移除可能残留的 YAML 代码块或独立元数据块 (以防止大模型漏出)
+        body = re.sub(r'^```yaml\s*.*?\s*```', '', body, flags=re.DOTALL | re.MULTILINE | re.IGNORECASE).strip()
+        body = re.sub(r'^---\s*.*?\s*---\s*', '', body, flags=re.DOTALL | re.MULTILINE)
+        body = re.sub(r'^---\s*', '', body, flags=re.MULTILINE)
+        body = body.strip()
+
         # 确保没有残留的 H1 标题（由组装器负责添加）
         body = re.sub(r'^#\s+.*?\n+', '', body, count=1).strip()
 

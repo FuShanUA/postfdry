@@ -70,13 +70,12 @@ def build_rewriting_prompt(source_text, thoughts="", type_selection="trend", sty
 
     # Ending section prompt
     if summary_mode == "explicit":
-        title_to_use = target_title if target_title else "文章主标题"
         guide = config.get("summary_guide", "结合所选叙事逻辑的侧重点进行实战层面的内容提炼，并针对未来布局给出具体的行动建议。")
         if summary_prompt:
             instruction_text = summary_prompt.strip()
         else:
             theme_rel = f"\n- 如有与【{narrative_theme}】相关，可以稍加提及，但不要硬关联。若叙事主题与本文内容高度相关则可以展开多写，若无直接关联则用一两句话略带提及即可，切忌强行关联、生硬升华。" if has_theme else ""
-            instruction_text = f"请在文章最后生成一个显式总结板块，标题为“### 总结：{title_to_use}”，用两三个自然段包含以下内容，不要用僵化的小标题-内容方式，而是夹叙夹议地进行总结：\n- 全文核心观点或洞察，直白表达，严禁虚空套话或强行升华。\n- 结合此叙事逻辑的侧重点（{config['focus']}）与指南（{guide}）进行提炼。{theme_rel}\n- 包含两三条清晰的、可指导行动的具体建议。"
+            instruction_text = f"请在文章最后生成一个显式总结板块，标题固定为“### 总结与行动建议”，用两三个自然段包含以下内容，不要用僵化的小标题-内容方式，而是夹叙夹议地进行总结：\n- 全文核心观点或洞察，直白表达，严禁虚空套话或强行升华。\n- 结合此叙事逻辑的侧重点（{config['focus']}）与指南（{guide}）进行提炼。{theme_rel}\n- 包含两三条清晰的、可指导行动的具体建议。"
         ending_instruction = f"""### ENDING: 显式总结 (Explicit Conclusion)
 {instruction_text}"""
     elif summary_mode == "implicit":
