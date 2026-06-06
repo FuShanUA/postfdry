@@ -251,12 +251,13 @@ def run_interpret_workflow(input_file, project_root=None, text_style="formal", c
     print(f"  STEP 4: Packaging article with NEW layout (H1 + Author)...")
 
     # 1. First check if rewriter output has any heading as title
-    title = "无标题"
+    title = target_title or "无标题"
     # Find any heading at the very beginning that looks like a title (up to 3 hashes)
     h_match = re.search(r'^#{1,3}\s*(.*)$', rewritten_raw, re.MULTILINE)
     if h_match:
         # NEW: Clean up leading hashes from the subgroup to avoid "# ##" issues
-        title = re.sub(r'^#+\s*', '', h_match.group(1)).strip()
+        if not target_title:
+            title = re.sub(r'^#+\s*', '', h_match.group(1)).strip()
         # Clean the title line from body
         body = re.sub(r'^#{1,3}\s*.*$\n*', '', rewritten_raw, count=1, flags=re.MULTILINE).strip()
     else:
@@ -265,7 +266,8 @@ def run_interpret_workflow(input_file, project_root=None, text_style="formal", c
         if meta_match:
             try:
                 fm = yaml.safe_load(meta_match.group(1))
-                title = fm.get('title', title)
+                if not target_title:
+                    title = fm.get('title', title)
                 body = (rewritten_raw[:meta_match.start()] + rewritten_raw[meta_match.end():]).strip()
             except:
                 body = rewritten_raw

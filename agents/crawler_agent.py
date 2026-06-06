@@ -950,6 +950,48 @@ def extract_from_url(url, model_name="gemini-3.1-flash-preview"):
         "url": url
     }, md_content
 
+def pdf_ocr_fallback(filepath):
+    import base64
+    from llm_utils import get_client
+    
+    print(f"Crawler Agent: Reading PDF binary for OCR fallback...")
+    with open(filepath, 'rb') as f:
+        pdf_bytes = f.read()
+    
+    base64_pdf = base64.b64encode(pdf_bytes).decode('utf-8')
+    
+    prompt = """You are a highly accurate document transcription system.
+Your task is to transcribe the contents of the attached PDF document page by page.
+Rules:
+1. Extract and output ALL visible text from the document. Do not summarize, skip, or modify the text.
+2. Keep the original headings, paragraph structures, lists, and tables intact (format tables as Markdown tables if possible).
+3. If a page has no text or is purely visual, describe the visual layout or skip it silently.
+4. Output the raw text of the document directly without adding introductory or concluding remarks. Just output the content.
+"""
+    
+    content_payload = [
+        {
+            "inline_data": {
+                "mime_type": "application/pdf",
+                "data": base64_pdf
+            }
+        },
+        prompt
+    ]
+    
+    client = get_client()
+    for ocr_model in ["gemini-3.1-flash-preview", "gemini-2.5-flash"]:
+        try:
+            print(f"Crawler Agent: Invoking LLM for PDF OCR (Model: {ocr_model})...")
+            result = client.generate_content(content_payload, model_name=ocr_model)
+            if result and result.strip():
+                return result.strip()
+        except Exception as e:
+            print(f"Crawler Agent: OCR fallback with {ocr_model} failed: {e}")
+            continue
+    
+    raise Exception("Both Gemini models failed for PDF OCR.")
+
 def extract_from_file(filepath):
     """Extract content from local file."""
     ext = os.path.splitext(filepath)[1].lower()
@@ -972,8 +1014,18 @@ def extract_from_file(filepath):
                 content = "\n\n".join([page.extract_text() or "" for page in reader.pages])
                 pdf_error = None  # pypdf succeeded
             except Exception as e2:
-                content = f"[PDF extraction failed: {pdf_error} | {e2}]"
+                content = ""
                 print(f"Crawler Agent: PDF extraction error: {pdf_error} | {e2}")
+
+        if not content.strip() or len(content.strip()) < 100:
+            print("Crawler Agent: PDF content extracted by standard libraries is empty or too short. Trying OCR fallback...")
+            try:
+                content = pdf_ocr_fallback(filepath)
+                pdf_error = None
+            except Exception as ocr_err:
+                print(f"Crawler Agent: OCR fallback failed: {ocr_err}")
+                if not content:
+                    content = f"[PDF extraction failed: {pdf_error} | OCR failed: {ocr_err}]"
 
     elif ext in ['.txt', '.md']:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:

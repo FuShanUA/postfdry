@@ -336,6 +336,21 @@ class LLMClient:
             model = genai.GenerativeModel(model_name)
             self.limiter.wait()
 
+            if isinstance(content, list):
+                processed_parts = []
+                for p in content:
+                    if isinstance(p, dict) and "inline_data" in p:
+                        import base64
+                        mime_type = p["inline_data"]["mime_type"]
+                        data_bytes = base64.b64decode(p["inline_data"]["data"])
+                        processed_parts.append({
+                            "mime_type": mime_type,
+                            "data": data_bytes
+                        })
+                    else:
+                        processed_parts.append(p)
+                content = processed_parts
+
             response = model.generate_content(content)
 
             # Handle response

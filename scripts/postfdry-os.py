@@ -304,9 +304,25 @@ class ProjectManager:
         is_html = self.input_path.lower().endswith('.html') or self.input_path.lower().endswith('.htm')
         is_pdf = self.input_path.lower().endswith('.pdf')
         if self.input_path.startswith(('http://', 'https://')) or is_html or is_pdf:
+            is_valid_cache = False
             if os.path.exists(source_file) and os.path.getsize(source_file) > 100:
-                print(f"ℹ️  [Smart Check] 源文件已存在且非空，跳过重新抓取以保留修改后的元数据。")
+                try:
+                    from common_utils import MetadataEngine
+                    with open(source_file, 'r', encoding='utf-8') as f:
+                        source_content = f.read()
+                    meta_eng = MetadataEngine(source_content)
+                    body = meta_eng.clean_body(source_content, keep_cover=True).strip()
+                    if len(body) > 100 and "PDF extraction failed" not in body:
+                        is_valid_cache = True
+                except Exception:
+                    pass
+            
+            if is_valid_cache:
+                print(f"ℹ️  [Smart Check] 源文件已存在且有效，跳过重新抓取以保留修改后的元数据。")
             else:
+                if os.path.exists(source_file):
+                    try: os.remove(source_file)
+                    except: pass
                 print(f"🚀 正在抓取并利用 AI 优化原文内容...")
                 crawler_agent.run(self.input_path, output_file=source_file, model_name=model_name)
         else:
