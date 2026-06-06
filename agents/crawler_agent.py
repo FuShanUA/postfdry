@@ -464,7 +464,7 @@ def sniff_metadata(url):
         print(f"  [Sniffing Failed] {e}")
         return {}
 
-def extract_from_url(url):
+def extract_from_url(url, model_name="gemini-3.1-flash-preview"):
     """Extract content from URL. Uses fxtwitter for X posts, otherwise Defuddle CLI."""
     import subprocess
     import json
@@ -903,7 +903,7 @@ def extract_from_url(url):
 
     # 5. Semantic Boilerplate Scouting (LLM)
     # The USER requested LLM-based analysis of the head and tail to identify the real content boundaries.
-    md_content = identify_boilerplate_via_llm(md_content)
+    md_content = identify_boilerplate_via_llm(md_content, model_name=model_name)
 
     # 6. Boilerplate Scrubbing (Header-independent Bio/Intro stripping)
     # This pre-cleaning reduces noise for the AI refinement stage.
@@ -1203,11 +1203,11 @@ def download_image(url, assets_dir):
         print(f"[WARN] Failed to download {url}: {e}")
         return None
 
-def run(target_input, output_file=None, skip_refine=False, model_name="gemini-3-flash-preview"):
+def run(target_input, output_file=None, skip_refine=False, model_name="gemini-3.1-flash-preview"):
     if os.path.exists(target_input):
         metadata, body = extract_from_file(target_input)
     elif target_input.startswith("http"):
-        result = extract_from_url(target_input)
+        result = extract_from_url(target_input, model_name=model_name)
         if isinstance(result, str):
             print(result)
             sys.exit(1)
@@ -1293,7 +1293,7 @@ def run(target_input, output_file=None, skip_refine=False, model_name="gemini-3-
         print(res[:800] + "...")
     return res
 
-def identify_boilerplate_via_llm(md_content, model_name="gemini-3-flash-preview"):
+def identify_boilerplate_via_llm(md_content, model_name="gemini-3.1-flash-preview"):
     """
     Analyzes the head and tail of the document to semantically identify
     where the core content starts and ends, stripping marketing/newsletter noise.

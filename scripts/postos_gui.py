@@ -601,7 +601,7 @@ class PostOSGUI:
         self.vendor_combo.bind("<<ComboboxSelected>>", self.on_vendor_change)
 
         ttk.Label(f_llm, text="选择模型:").grid(row=0, column=2, sticky="w", padx=10)
-        self.model_var = tk.StringVar(value=self.settings.get("model", "gemini-3-flash-preview"))
+        self.model_var = tk.StringVar(value=self.settings.get("model", "gemini-3.1-flash-preview"))
         self.model_combo = ttk.Combobox(f_llm, textvariable=self.model_var, width=22)
         self.model_combo.grid(row=0, column=3, sticky="w", padx=5)
         self.btn_set_text_default = ttk.Button(f_llm, text="设为默认", command=self.set_text_model_default)
