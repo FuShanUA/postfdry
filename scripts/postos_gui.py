@@ -423,16 +423,9 @@ class PostOSGUI:
         self.mode_combo.grid(row=0, column=1, sticky="w", padx=5)
         self.mode_combo.bind("<<ComboboxSelected>>", self.on_mode_change)
 
-        ttk.Label(f_global, text="发布作者:").grid(row=0, column=2, sticky="w", padx=(20, 5), pady=2)
-        self.author_history = self.settings.get("author_history", ["AI数据治理研究院"])
-        if "AI数据治理研究院" not in self.author_history:
-            self.author_history.append("AI数据治理研究院")
-        last_author = self.settings.get("wechat_author", "AI数据治理研究院")
-        if not last_author:
-            last_author = "AI数据治理研究院"
-        self.wechat_author_var = tk.StringVar(value=last_author)
-        self.wechat_author_combo = ttk.Combobox(f_global, textvariable=self.wechat_author_var, values=self.author_history, width=20)
-        self.wechat_author_combo.grid(row=0, column=3, sticky="w", padx=5)
+        # 内部保留 wechat_author_var 作为兼容变量（不显示在 UI 中）
+        self.author_history = self.settings.get("author_history", [])
+        self.wechat_author_var = tk.StringVar(value=self.settings.get("wechat_author", ""))
 
         # Columns container (side-by-side)
         f_cols = ttk.Frame(f_param)
@@ -685,7 +678,7 @@ class PostOSGUI:
         self.author_var = tk.StringVar()
         ttk.Entry(f_meta, textvariable=self.author_var, width=30).grid(row=3, column=1, sticky="w", padx=5, columnspan=2)
 
-        ttk.Label(f_meta, text="发布机构:").grid(row=4, column=0, sticky="w", pady=5)
+        ttk.Label(f_meta, text="机构/平台:").grid(row=4, column=0, sticky="w", pady=5)
         self.source_var = tk.StringVar()
         ttk.Entry(f_meta, textvariable=self.source_var, width=30).grid(row=4, column=1, sticky="w", padx=5, columnspan=2)
 
@@ -982,10 +975,11 @@ class PostOSGUI:
             existing_date = meta_eng.get('date') or meta_eng.get('publish_date') or ''
             final_date = gui_date or existing_date
 
+            interpret_pub = self.interpret_publisher_var.get().strip() if hasattr(self, 'interpret_publisher_var') else ""
             new_yaml = {
                 'title': self.std_title_var.get().strip(),
                 'eng_title': self.eng_title_var.get().strip(),
-                'author': self.wechat_author_var.get().strip(),
+                'author': interpret_pub,
                 'original_author': self.author_var.get().strip(),
                 'date': final_date,
                 'source': self.source_var.get().strip(),
@@ -1025,7 +1019,8 @@ class PostOSGUI:
             config_data['standard_title_history'] = self.standard_title_history
 
         config_data['eng_title'] = self.eng_title_var.get().strip()
-        config_data['author'] = self.wechat_author_var.get().strip()
+        interpret_pub = self.interpret_publisher_var.get().strip() if hasattr(self, 'interpret_publisher_var') else ""
+        config_data['author'] = interpret_pub
         config_data['original_author'] = self.author_var.get().strip()
         config_data['source'] = self.source_var.get().strip()
         config_data['date'] = self.date_var.get().strip()
