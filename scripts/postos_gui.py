@@ -285,7 +285,8 @@ class PostOSGUI:
             "author_history": ["AI数据治理研究院"],
             "wechat_account_alias": "default",
             "vendor_default_models": {},
-            "image_vendor_default_models": {}
+            "image_vendor_default_models": {},
+            "interpret_publisher": "AI数据治理研究院"
         }
         if os.path.exists(self.settings_file):
             try:
@@ -329,7 +330,8 @@ class PostOSGUI:
             "author_history": self.author_history,
             "wechat_account_alias": self.get_selected_wechat_alias(),
             "vendor_default_models": self.vendor_default_models,
-            "image_vendor_default_models": self.image_vendor_default_models
+            "image_vendor_default_models": self.image_vendor_default_models,
+            "interpret_publisher": self.interpret_publisher_var.get().strip() if hasattr(self, 'interpret_publisher_var') else ""
         }
         
         # Save active text before writing to file
@@ -544,6 +546,11 @@ class PostOSGUI:
         self.summary_mode_combo = ttk.Combobox(f_interpret_left, textvariable=self.summary_mode_var, values=["显式总结", "隐式总结", "不总结"], width=12, state="readonly")
         self.summary_mode_combo.grid(row=4, column=1, sticky="w", padx=5)
         self.summary_mode_combo.bind("<<ComboboxSelected>>", self.on_summary_mode_change)
+
+        # 6. 发布单位（解读文章的编辑机构，用于生成解读文章作者栏和公众号作者栏）
+        ttk.Label(f_interpret_left, text="发布单位:").grid(row=5, column=0, sticky="w", pady=2)
+        self.interpret_publisher_var = tk.StringVar(value=self.settings.get("interpret_publisher", "AI数据治理研究院"))
+        ttk.Entry(f_interpret_left, textvariable=self.interpret_publisher_var, width=14).grid(row=5, column=1, sticky="w", padx=5)
 
         # Right Column Widgets inside self.f_interpret (for narrative content editor)
         f_summary_container = ttk.Frame(f_interpret_right)
@@ -1022,6 +1029,10 @@ class PostOSGUI:
         config_data['original_author'] = self.author_var.get().strip()
         config_data['source'] = self.source_var.get().strip()
         config_data['date'] = self.date_var.get().strip()
+        # 解读专属发布单位：区别于原文作者/机构
+        interpret_pub = self.interpret_publisher_var.get().strip() if hasattr(self, 'interpret_publisher_var') else ""
+        if interpret_pub:
+            config_data['interpret_publisher'] = interpret_pub
         target = self.input_var.get().strip()
         if target and not target.startswith(('http://', 'https://')):
             config_data['original_path'] = os.path.abspath(target)
@@ -1638,7 +1649,12 @@ class PostOSGUI:
         else:
             cmd.append("--no-pdf")
         
-        gui_author = self.wechat_author_var.get().strip()
+        # 解读模式用"发布单位"作为作者；译介/两者模式用全局"发布作者"
+        mode_val_for_author = self.task_mode_map.get(self.mode_var.get(), "both")
+        if mode_val_for_author == "interpret" and hasattr(self, 'interpret_publisher_var'):
+            gui_author = self.interpret_publisher_var.get().strip() or self.wechat_author_var.get().strip()
+        else:
+            gui_author = self.wechat_author_var.get().strip()
         if gui_author:
             cmd.extend(["--author", gui_author])
 
