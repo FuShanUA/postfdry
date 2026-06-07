@@ -237,9 +237,7 @@ def customize_cover(template_path, output_path, metadata):
     author = _clean_meta_value(metadata.get('author'))
     source = _clean_meta_value(metadata.get('source', metadata.get('publisher')))
 
-    if author and source and author.lower() not in source.lower():
-        publisher_text = f"{author}，{source}"
-    elif author:
+    if author:
         publisher_text = author
     elif source:
         publisher_text = source
